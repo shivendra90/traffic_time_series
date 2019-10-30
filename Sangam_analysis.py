@@ -6,38 +6,54 @@ Created on Sun Jul 28 14:00:10 2019
 @author: Shivendra
 
 For ease of use, the modules used by this analysis
-is included in the load_libs.py file, due to the
-length of this file. Please feel free to load that
-file.
+are included in the load_libs.py file. Since it is
+always more efficient to load all the modules through
+one-liners, it is always advisable to load that file.
 """
 
 """
 Section: 1 
-Load Libraries and data 
+Load Libraries and data
 """
 # exec(open("load_libs.py").read())
 # Use the above command to load the libraries in one click
 
+
+from xgboost import XGBRegressor, XGBRFRegressor
+from yellowbrick.regressor import residuals_plot, prediction_error
+from yellowbrick.features import rank2d, rank1d
+from yellowbrick.model_selection import RFECV, ValidationCurve, LearningCurve, LearningCurve
+from sklearn.linear_model import LinearRegression, LassoCV, ElasticNetCV, SGDRegressor, PassiveAggressiveRegressor, Ridge
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor, BaggingRegressor
+from sklearn.svm import SVR, NuSVR
 from warnings import filterwarnings
-import matplotlib.pyplot as plot
-import numpy as np
-import pandas as pd
-import seaborn as sns
 from matplotlib.pylab import rcParams
 from pandas.plotting import register_matplotlib_converters
 from seaborn import catplot
 from sklearn.preprocessing import MinMaxScaler
-
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+import pandas_profiling
+import statsmodels.api as sm
+import sklearn.metrics as metrics
+import dask.dataframe as dd
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import statsmodels.api as sm
 register_matplotlib_converters()
 filterwarnings("ignore")
-plot.style.use("seaborn-whitegrid")
-rcParams['figure.figsize'] = 10, 8
+plt.style.use("seaborn-whitegrid")
+# rcParams['figure.figsize'] = 10, 8
+plt.ion()
 np.random.seed(1000)
-print("Environment is ready.")
+print("\nEnvironment is ready.")
 
-main_data = pd.read_csv("Train.csv")
+main_data = dd.read_csv("Train.csv")
 test_set = pd.read_csv("Test.csv")  # 14454 rows
-submission = pd.DataFrame({"date_time": test_set['date_time'], "traffic_volume": np.nan})
+submission = pd.DataFrame({"date_time": test_set['date_time'],
+                           "traffic_volume": np.nan})
 
 """
 Section: 2
@@ -52,7 +68,7 @@ print(len(test_set) == test_set.date_time.nunique())  # True again
 main_data.traffic_volume.describe()
 
 # A rough plot
-main_data.traffic_volume.plot(alpha=0.4)
+main_data.traffic_volume.plt(alpha=0.4)
 
 print("Percent of NA values: \n{0}".format((main_data.isna().sum()) / 100))
 print("Percent of NA values: \n{0}".format((test_set.isna().sum()) / 100))
@@ -68,32 +84,45 @@ holiday_count = main_data.is_holiday.value_counts()
 weather_count = main_data.weather_type.value_counts()
 
 sns.barplot(holiday_count.index, holiday_count.values)
-plot.title("Frequency Distribution (holidays)")
-plot.show()
+plt.title("Frequency Distribution (holidays)")
+plt.show()
 
 sns.barplot(weather_count.index, weather_count.values)
-plot.title("Frequency Distribution (weather types)")
-plot.show()
+plt.title("Frequency Distribution (weather types)")
+plt.show()
 
+# Resample data to month start and show mean of traffic volume
+traffic_resampled = main_data["traffic_volume"].resample("MS").mean()
+
+traffic_resampled.plot()
+plt.xlabel("Year")
+plt.ylabel("Traffic Freq.")
+plt.title("Traffic Volume 2012-17")
+
+decomposition = sm.tsa.seasonal_decompose(traffic_resampled, model='additive')
+
+decomposition.plot()
 # Clean up
 del weather_count, holiday_count
 
 """
 Section: 3
-Data cleaning
+Preprocessing
 """
 main_data["date_time"] = pd.to_datetime(main_data.date_time,
                                         format="%Y-%m-%d %H:%M:%S")
 main_data = main_data.set_index("date_time")
 
-plot.plot("traffic_volume", data=main_data, alpha=0.3, marker='.')
+plt.plot("traffic_volume", data=main_data, alpha=0.3, marker='.')
 
 # Work on missing dates
-missing_range_1 = pd.date_range('2013-10-27 00:00:00', '2013-11-07 05:00:00', freq="H")
+missing_range_1 = pd.date_range(
+    '2013-10-27 00:00:00', '2013-11-07 05:00:00', freq="H")
 baseline_nov_2012 = main_data.loc['2012-10-27':'2012-11-06']
 
 gen_data = pd.DataFrame({'date_time': missing_range_1,
-                         'is_holiday': baseline_nov_2012['is_holiday'],  # Since no Day is a holiday
+                         # Since no Day is a holiday
+                         'is_holiday': baseline_nov_2012['is_holiday'],
                          'air_pollution_index': baseline_nov_2012['air_pollution_index'],
                          'humidity': baseline_nov_2012['humidity'],
                          'wind_speed': baseline_nov_2012['wind_speed'],
@@ -114,7 +143,8 @@ gen_data = gen_data.set_index("date_time")
 main_data = main_data.append(gen_data, sort=True)
 
 # Work with the most demanding gap
-missing_range_2 = pd.date_range("2014-08-08 03:00:00", "2015-06-24 10:00:00", freq="H")
+missing_range_2 = pd.date_range(
+    "2014-08-08 03:00:00", "2015-06-24 10:00:00", freq="H")
 len(missing_range_2)  # 7688 rows
 
 baseline2013_2014 = main_data.loc['2013-08-01':'2014-07-14']
@@ -151,7 +181,8 @@ main_data.drop("traffic_volume", axis=1, inplace=True)
 
 # Work with categorical data
 print(main_data.dtypes)
-obj_df = main_data.select_dtypes(include=["object"]).copy()  # Subset for better visualisation
+# Subset for better visualisation
+obj_df = main_data.select_dtypes(include=["object"]).copy()
 
 label_dict = {
     "is_holiday": {"None": 0, "New Years Day": 1, "Thanksgiving Day": 2, "Christmas Day": 3, "Columbus Day": 4,
@@ -338,37 +369,43 @@ main_data.loc[(main_data.index.year == 2016) & (main_data.index.month == 8) & (m
               ['is_holiday']] = 10
 
 # Some plotting
-cols_to_plot = ["air_pollution_index", "dew_point", "humidity", "temperature", "wind_speed"]
+cols_to_plot = ["air_pollution_index", "dew_point",
+                "humidity", "temperature", "wind_speed"]
 
-fig, axes = plot.subplots(nrows=len(cols_to_plot))
+fig, axes = plt.subplots(nrows=len(cols_to_plot))
 for i, var in enumerate(cols_to_plot):
-    main_data[var].plot.density(ax=axes[i])
+    main_data[var].plt.density(ax=axes[i])
 
 main_data['traffic_volume'] = target
 group_df = main_data.resample("D").interpolate()[::7]
 
-fig, (axes_1, axes_2, axes_3) = plot.subplots(nrows=3, ncols=1)
-axes_1.plot(group_df['traffic_volume'].groupby([group_df.index.week]).mean())
+fig, (axes_1, axes_2, axes_3) = plt.subplots(nrows=3, ncols=1)
+axes_1.plt(group_df['traffic_volume'].groupby([group_df.index.week]).mean())
 axes_1.set_title("Traffic Volume")
 
-axes_2.plot(group_df['dew_point'], color='orange', label="Dew point")
+axes_2.plt(group_df['dew_point'], color='orange', label="Dew point")
 axes_2.set_title("Dew Point & Visibility (miles)")
 
-axes_3.plot(group_df['visibility_in_miles'], color='green', label="Visibility (miles)")
+axes_3.plt(group_df['visibility_in_miles'],
+            color='green', label="Visibility (miles)")
 axes_3.set_title("Visibility (miles)")
 fig.show()
 
 fig.savefig("Traffic_vol_vs_dew_point_vs_visibility")
 
-fig_1 = plot.plot(group_df['traffic_volume'].groupby([group_df.index.week]).mean())
+fig_1 = plt.plot(group_df['traffic_volume'].groupby(
+    [group_df.index.week]).mean())
 fig_1.set_title("Traffic Volume")
 
-fig_2 = catplot(x='dew_point', y='traffic_volume', order=[np.arange(1, 10)], data=group_df)
+fig_2 = catplot(x='dew_point', y='traffic_volume',
+                order=[np.arange(1, 10)], data=group_df)
 
-fig_3 = catplot(x='visibility_in_miles', y='traffic_volume', order=[np.arange(1, 10)], data=group_df)
+fig_3 = catplot(x='visibility_in_miles', y='traffic_volume',
+                order=[np.arange(1, 10)], data=group_df)
 
 # Visualize holiday effect on traffic
-fig_4 = catplot(x='is_holiday', y='traffic-volume', kind='boxen', data=main_data)
+fig_4 = catplot(x='is_holiday', y='traffic-volume',
+                kind='boxen', data=main_data)
 
 # Standardise and normalize data
 cols_to_scale = ["air_pollution_index", "clouds_all", "humidity",
@@ -416,9 +453,13 @@ main_data["wind_direction"] = wind_direction
 main_data["wind_speed"] = wind_speed
 
 # Clean up
-del [air_pollution_index, clouds_all, humidity, rain_p_h, temperature, wind_direction, wind_speed]
+del [air_pollution_index, clouds_all, humidity,
+     rain_p_h, temperature, wind_direction, wind_speed]
 
-fig, axes = plot.subplots(nrows=8, ncols=1, figsize=(10, 15))  # Always length by breadth
+fig, axes = plt.subplots(nrows=8,
+                         ncols=1,
+                         figsize=(10, 15))  # Always length by breadth
+
 for i, var in enumerate(cols_to_plot):
     sns.distplot(main_data[var], ax=axes[i], axlabel=var)
 fig.show()
@@ -433,12 +474,15 @@ profile.to_file(output_file="profile_report.html")
 # Remove unneeded variables
 main_data.drop("snow_p_h", axis=1, inplace=True)
 main_data.drop("rain_p_h", axis=1, inplace=True)
-main_data.drop("visibility_in_miles", axis=1, inplace=True)  # Highly correlated with dew_point, r = 1
+# Highly correlated with dew_point, r = 1
+main_data.drop("visibility_in_miles", axis=1, inplace=True)
 
 # One hot encoding
 onehot_holiday = pd.get_dummies(main_data['is_holiday'], prefix="is_holiday")
-onehot_weather = pd.get_dummies(main_data['weather_description'], prefix="weather_descr")
-onehot_w_type = pd.get_dummies(main_data['weather_type'], prefix="weather_type")
+onehot_weather = pd.get_dummies(
+    main_data['weather_description'], prefix="weather_descr")
+onehot_w_type = pd.get_dummies(
+    main_data['weather_type'], prefix="weather_type")
 onehot_dew_point = pd.get_dummies(main_data['dew_point'], prefix="dew_point")
 
 main_data = pd.concat([main_data, onehot_holiday], axis=1)
@@ -454,7 +498,6 @@ del [onehot_dew_point, onehot_holiday, onehot_w_type, onehot_weather]
 # main_data.reset_index(inplace=True)
 
 # Engineer features
-
 main_data['is_weekend'] = 0
 
 for row in range(len(main_data)):
@@ -466,10 +509,25 @@ test_set["traffic_volume"] = np.nan
 Section: 4
 Training and testing
 """
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error
 
 main_data['traffic_volume'] = target
+
+# Collinearity check
+rank_vis = rank1d(main_data)
+rank_vis.show()
+
+rank_vis = rank2d(main_data)
+rank_vis.show()
+
+rank_vis = rank1d(main_data, algorithm='shapiro')
+rank_vis.show()
+
+# Remove features causing collinearity
+cols_to_drop = ["weather_type_0", "weather_type_1", "weather_type_2", "weather_type_3", "weather_type_4",
+                "weather_type_5", "weather_type_6", "weather_type_7", "weather_type_8", "weather_type_9",
+                "weather_type_10"]
+
+main_data.drop(cols_to_drop, axis=1, inplace=True)
 
 # Linear regression
 train = main_data[:27380]
@@ -480,10 +538,116 @@ y_train = train['traffic_volume']
 x_test = test.drop("traffic_volume", axis=1)
 y_test = test["traffic_volume"]
 
-model = LinearRegression(n_jobs=2)
+model = LinearRegression()
 model.fit(x_train, y_train)
-predictions = model.predict(x_test)
-print("Mean absolute error: ", mean_squared_error(y_test, predictions))
+preds = model.predict(x_test)
+print("\nMean absolute error: ", metrics.mean_absolute_error(y_test, preds))
 
-from sklearn.linear_model import MultiTaskLasso
-model = MultiTaskLasso()
+model = Ridge()
+model.fit(x_train, y_train)
+preds = model.predict(x_test)
+print("\nMean absolute error: ", metrics.mean_absolute_error(y_test, preds))
+
+model = LassoCV(alphas=np.logspace(-6, 6, 13))
+model.fit(x_train, y_train)
+preds = model.predict(x_test)
+print("\nMean absolute error: ", metrics.mean_absolute_error(y_test, preds))
+
+models = [LinearRegression(),
+          LassoCV(alphas=np.logspace(-6, 6, 13)),
+          ElasticNetCV(alphas=np.logspace(-6, 6, 13)),
+          SGDRegressor(),
+          PassiveAggressiveRegressor(),
+          Ridge(),
+          PassiveAggressiveRegressor(),
+          RandomForestRegressor(max_depth=5),
+          GradientBoostingRegressor(),
+          AdaBoostRegressor(loss='exponential'),
+          BaggingRegressor(),
+          SVR(),
+          NuSVR(),
+          XGBRFRegressor(max_depth=5, objective="reg:squarederror"),
+          XGBRegressor(max_depth=5, objective="reg:squarederror")]
+
+
+def show_score(x, y, estimator):
+    """
+    Returns MAE scores for specified models.
+    Also returns r2 scores if applicable    
+
+    Arguments:
+        x {[array/DataFrame]} -- [Array or matrix of features. Can also be dataframe]
+        y {[array]} -- [Target values]
+        estimator {[str]} -- [The estimator being used]
+    """
+    # Instantiate models and predict values
+    model = estimator
+    model.fit(x, y)
+    preds = model.predict(x_test)
+    actuals = y_test
+
+    # Print results
+    print(f"{estimator.__class__.__name__}:: r2 score = {round(metrics.r2_score(actuals, preds), 2)} : MAE = {round(metrics.mean_absolute_error(actuals, preds), 2)}")
+
+for model in models:
+    show_score(x_train, y_train, model)
+
+figure, axes = plt.subplots(nrows=len(models), ncols=2, figsize=(9, 9), sharex=True)    
+
+for ind, model in enumerate(models):
+    model.fit(x_train, y_train)
+    preds = model.predict(x_test)
+    for index, ax in enumerate(axes):
+        residuals_plot(model, x_test, preds, hist=False, ax=ax[index])
+        prediction_error(model, x_test, preds, ax=ax)
+        
+# Do some scoring on XGB regressors
+# Validation curve
+viz = ValidationCurve(
+        XGBRegressor(objective="reg:squarederror"), param_name="max_depth",
+        param_range=np.arange(1, 11), cv=5, scoring="r2"
+        )
+viz.fit(x_train, y_train)
+viz.show()
+
+# Learning curve
+model = XGBRegressor(objective="reg:squarederror")
+viz_2 = LearningCurve(
+        model, scoring="r2")
+viz_2.fit(x_train, y_train)
+viz_2.show()
+
+model = RFECV(LassoCV(), cv=5, scoring='r2')
+model.fit(x_train, y_train)
+model.show()
+
+"""
+Section: 5
+Time-Series Algorithms
+"""
+# Fitting ARIMA
+# Original Series
+# plt.rcParams.update({'figure.figsize':(9,7), 'figure.dpi':120})
+fig, axes = plt.subplots(3, 1, sharex=True)
+plot_acf(main_data.traffic_volume, ax=axes[0])
+
+# 1st Differencing
+plot_acf(main_data.traffic_volume.diff(), ax=axes[1])
+
+# 2nd Differencing
+plot_acf(main_data.traffic_volume.diff().diff(), ax=axes[2])
+
+plt.show()
+
+from statsmodels.tsa.stattools import adfuller
+from numpy import log
+
+result = adfuller(main_data.traffic_volume)
+print("ADF Statistic: %f" % result[0])
+print("p-value: %f" % result[1])
+
+from statsmodels.tsa.arima_model import ARIMA
+
+
+def evaluate_model():
+    #TODO: Design a model eval algorithm
