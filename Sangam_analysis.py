@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+https://www.kaggle.com/rohith203/traffic-volume-dataset#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Created on Sun Jul 28 14:00:10 2019
@@ -12,17 +12,20 @@ one-liners, it is always advisable to load that file.
 """
 
 """
-Section: 1 
+Section: 1
 Load Libraries and data
 """
 # exec(open("load_libs.py").read())
 # Use the above command to load the libraries in one click
 
 
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from numpy import log
+from statsmodels.tsa.stattools import adfuller
 from xgboost import XGBRegressor, XGBRFRegressor
 from yellowbrick.regressor import residuals_plot, prediction_error
 from yellowbrick.features import rank2d, rank1d
-from yellowbrick.model_selection import RFECV, ValidationCurve, LearningCurve, LearningCurve
+from yellowbrick.model_selection import RFECV, ValidationCurve, LearningCurve
 from sklearn.linear_model import LinearRegression, LassoCV, ElasticNetCV, SGDRegressor, PassiveAggressiveRegressor, Ridge
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor, BaggingRegressor
 from sklearn.svm import SVR, NuSVR
@@ -107,7 +110,7 @@ del weather_count, holiday_count
 
 """
 Section: 3
-Preprocessing
+Preprocessing/Data Preparation
 """
 main_data["date_time"] = pd.to_datetime(main_data.date_time,
                                         format="%Y-%m-%d %H:%M:%S")
@@ -176,8 +179,13 @@ main_data = main_data.sort_index()  # 41708 rows
 
 main_data = main_data.loc[~main_data.index.duplicated(keep='last')]
 
-target = main_data["traffic_volume"].copy()
+target = main_data["traffic_volume"].copy()  # Keep this safe
 main_data.drop("traffic_volume", axis=1, inplace=True)
+
+main_data["Year"] = main_data.index.year
+main_data["Month"] = main_data.index.month
+main_data["Day"] = main_data.index.day
+main_data["Hour"] = main_data.index.hour
 
 # Work with categorical data
 print(main_data.dtypes)
@@ -209,9 +217,6 @@ obj_df.replace(label_dict, inplace=True)
 main_data.replace(label_dict, inplace=True)
 
 # Clean up holidays for newly inserted rows
-main_data["Month"] = main_data.index.month
-main_data["Year"] = main_data.index.year
-main_data["Day"] = main_data.index.day
 
 # Holiday clean up
 # First fill wrong entries with zeros
@@ -387,7 +392,7 @@ axes_2.plt(group_df['dew_point'], color='orange', label="Dew point")
 axes_2.set_title("Dew Point & Visibility (miles)")
 
 axes_3.plt(group_df['visibility_in_miles'],
-            color='green', label="Visibility (miles)")
+           color='green', label="Visibility (miles)")
 axes_3.set_title("Visibility (miles)")
 fig.show()
 
@@ -573,7 +578,7 @@ models = [LinearRegression(),
 def show_score(x, y, estimator):
     """
     Returns MAE scores for specified models.
-    Also returns r2 scores if applicable    
+    Also returns r2 scores if applicable
 
     Arguments:
         x {[array/DataFrame]} -- [Array or matrix of features. Can also be dataframe]
@@ -584,15 +589,18 @@ def show_score(x, y, estimator):
     model = estimator
     model.fit(x, y)
     preds = model.predict(x_test)
+    preds = abs(preds.astype(int))
     actuals = y_test
 
     # Print results
     print(f"{estimator.__class__.__name__}:: r2 score = {round(metrics.r2_score(actuals, preds), 2)} : MAE = {round(metrics.mean_absolute_error(actuals, preds), 2)}")
 
+
 for model in models:
     show_score(x_train, y_train, model)
 
-figure, axes = plt.subplots(nrows=len(models), ncols=2, figsize=(9, 9), sharex=True)    
+figure, axes = plt.subplots(
+    nrows=len(models), ncols=2, figsize=(9, 9), sharex=True)
 
 for ind, model in enumerate(models):
     model.fit(x_train, y_train)
@@ -600,20 +608,20 @@ for ind, model in enumerate(models):
     for index, ax in enumerate(axes):
         residuals_plot(model, x_test, preds, hist=False, ax=ax[index])
         prediction_error(model, x_test, preds, ax=ax)
-        
-# Do some scoring on XGB regressors
+
+# Do some scoring on XGB estimators
 # Validation curve
 viz = ValidationCurve(
-        XGBRegressor(objective="reg:squarederror"), param_name="max_depth",
-        param_range=np.arange(1, 11), cv=5, scoring="r2"
-        )
+    XGBRegressor(objective="reg:squarederror"), param_name="max_depth",
+    param_range=np.arange(1, 11), cv=5, scoring="r2"
+)
 viz.fit(x_train, y_train)
 viz.show()
 
 # Learning curve
 model = XGBRegressor(objective="reg:squarederror")
 viz_2 = LearningCurve(
-        model, scoring="r2")
+    model, scoring="r2")
 viz_2.fit(x_train, y_train)
 viz_2.show()
 
@@ -639,15 +647,66 @@ plot_acf(main_data.traffic_volume.diff().diff(), ax=axes[2])
 
 plt.show()
 
-from statsmodels.tsa.stattools import adfuller
-from numpy import log
 
+# Confirm if d is required
 result = adfuller(main_data.traffic_volume)
 print("ADF Statistic: %f" % result[0])
 print("p-value: %f" % result[1])
 
-from statsmodels.tsa.arima_model import ARIMA
+
+# Show number of p terms required
+fig, axes = plt.subplots(1, 2, sharex=True)
+axes[0].plot(main_data.traffic_volume.diff()
+             )
+axes[0].set_title("1st Differencing")
+axes[1].set(ylim=(0.5))
+plot_pacf(main_data.traffic_volume.diff().dropna(), ax=axes[1])
+
+plt.show()
+
+# Start SARIMAX cross validation
+pList = [0, 1, 2, 4, 8, 10]
+dList = [0, 1, 2, 3, 4]
+qList = [0, 1, 2, 3]
 
 
-def evaluate_model():
-    #TODO: Design a model eval algorithm
+def show_bestScore(train_set, test_set):
+    """
+    Returns best cross-validated
+    MAE and (p,d,q) order
+    for a ts model.
+    """
+    start = input("Do you have p, d and q values defined? ")
+    if start == "No" or start == "no" or start == "N" or start == "n":
+        print("Please define p, d, q values and retry.")
+    else:
+        print("Finding out...")
+        target = [values for values in train_set]
+        testVals = [values for values in test_set]
+        target = train_set.astype("float32")
+        testVals = test_set.astype("float32")
+        score = [10000, (0, 0, 0)]
+        for p in pList:
+            for d in dList:
+                for q in qList:
+                    order = (p, d, q)
+                    model = SARIMAX(target, order=order)
+                    fit = model.fit(disp=False)
+                    preds = fit.forecast(len(test_set))
+                    error = mean_absolute_error(testVals, preds)
+                    if score[0] != 0 and error < score[0]:
+                        score.pop()
+                        score.pop()
+                        score.append(error)
+                        score.append(order)
+
+        best_score, best_order = score[0], score[1]
+        out = print("Best SARIMAX: MAE = %.f :: Order = %s" %
+                    (best_score, best_order))
+        if not best_score:
+            print("Invalid or missing value for MAE. Please retry.")
+        elif not best_order:
+            print("Invalid or missing order of values. Please retry.")
+        else:
+            return out  # MAE = 1702 :: Order = (8, 3, 1)
+
