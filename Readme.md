@@ -12,7 +12,7 @@ TODO:
 - [x] Perform comparison of supervised learning methods.
 - [x] Find out d, p, q terms for ARIMA models.
 - [x] Implement time-series algorithms (SARIMAX).
-- [ ] Implement a LSTM model.
+- [x] Implement a LSTM model.
 - [x] Compare time-series methods with regression/supervised methods.
 - [x] Add a fully functional jupyter notebook.
 - [ ] Debug LSTM model(s) for full functionality.
