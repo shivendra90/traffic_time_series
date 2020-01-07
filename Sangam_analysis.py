@@ -1,4 +1,3 @@
-https://www.kaggle.com/rohith203/traffic-volume-dataset#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Created on Sun Jul 28 14:00:10 2019
@@ -20,7 +19,6 @@ Load Libraries and data
 
 
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from numpy import log
 from statsmodels.tsa.stattools import adfuller
 from xgboost import XGBRegressor, XGBRFRegressor
 from yellowbrick.regressor import residuals_plot, prediction_error
@@ -44,11 +42,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import statsmodels.api as sm
+
 register_matplotlib_converters()
 filterwarnings("ignore")
 plt.style.use("seaborn-whitegrid")
-# rcParams['figure.figsize'] = 10, 8
+rcParams['figure.figsize'] = 10, 8
 plt.ion()
 np.random.seed(1000)
 print("\nEnvironment is ready.")
@@ -708,5 +706,130 @@ def show_bestScore(train_set, test_set):
         elif not best_order:
             print("Invalid or missing order of values. Please retry.")
         else:
-            return out  # MAE = 1702 :: Order = (8, 3, 1)
+            return out  # Best MAE = 700 :: Order = (8, 3, 1)
 
+
+"""
+Fitting a LSTM network
+This section follows very closely
+with this tutorial:
+https://stackabuse.com/time-series-prediction-using-lstm-with-pytorch-in-python/
+Thanks Mr. Usman for all the insights.
+"""
+import torch
+import torch.nn as nn
+
+scaler = MinMaxScaler()
+
+# Convert target values to float and then to tensor inputs
+target_norm = scaler.fit_transform(target.reshape(-1, 1))
+target_norm = torch.FloatTensor(target_norm).view(-1)
+
+train_window = 9128
+
+
+def create_sequences(input_data, train_window):
+    """
+    Parameters
+    ----------
+    input_data : Tensor object
+        Data converted to tensor object(s).
+    train_window : int
+        The sequence window for returning the train_window+1 value.
+
+    Returns
+    -------
+    List of sequence tuples.
+    """
+    inout_seq = []
+    length_df = len(input_data)
+    for i in range(length_df - train_window):
+        train_seq = input_data[i:i+train_window]
+        train_label = input_data[i+train_window:i+train_window+1]
+        inout_seq.append((train_seq, train_label))
+    return inout_seq
+
+
+def plot_sequence(sequence_data, axes, i):
+    """
+    Parameters
+    ----------
+    sequence_data : List of tuples: tensor objects
+        A list that contains tuples of generated sequences.
+    axes : str
+        This will remain the same object as defined for subplots.
+    i : int
+        Specify i for the subplot as well as the sequence.
+
+    Returns
+    -------
+    Plot of sequences.
+
+    """
+    axes[i].set_title("Sequence %d" % (i + 1))
+    axes[i].set_xlabel("Time Bars")
+    axes[i].set_ylabel("Value")
+    axes[i].plot(range(train_window), np.array(sequence_data[i][0]), color='r', label="Feature")
+    axes[i].plot(range(1, train_window + 1), np.array(sequence_data[i+1][0]), color='b', label="Target")
+    axes[i].legend()
+
+
+train_inout_seq = create_sequences(target_norm, 9128)
+
+
+class LSTM(nn.Module):
+    def __init__(self, input_size, hidden_layer, output_size):  # In most cases input and output size equal 1
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_layer = hidden_layer
+        self.output_size = output_size
+        self.lstm = nn.LSTM(input_size, hidden_layer)
+        self.linear = nn.Linear(hidden_layer, output_size)
+        self.hidden_cell = (torch.zeros(1,1,self.hidden_layer),
+                            torch.zeros(1,1,self.hidden_layer))
+    
+    def forward(self, input_seq):
+        lstm_out, self.hidden_cell = self.lstm(input_seq.view(len(input_seq),1,-1), self.hidden_cell)
+        predictions = self.linear(lstm_out.view(len(input_seq), -1))
+        return predictions[-1]
+
+
+epochs = 50
+model = LSTM(1, 100, 1)
+loss = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+for i in range(epochs+1):
+    for seq, label in train_inout_seq:
+        optimizer.zero_grad()
+        model.hidden_cell = (torch.zeros(1, 1, model.hidden_layer), torch.zeros(1, 1, model.hidden_layer))
+        predictions = model(seq)
+        single_loss = loss(predictions, label)
+        single_loss.backward()
+        optimizer.step()
+    
+    if i%10 == 0:
+        print("Epoch: {0} Loss: {1:10.10f}".format(i, single_loss))
+        
+to_pred = 9128
+test_inputs = target_norm[-train_window:].tolist()
+
+for i in range(to_pred):
+    seq = torch.FloatTensor(test_inputs[-train_window:])
+    with torch.no_grad():
+        model.hidden = (torch.zeros(1, 1, model.hidden_layer), torch.zeros(1, 1, model.hidden_layer))
+        test_inputs.append(model(seq).item())
+        
+inversed_preds = scaler.inverse_transform(np.array(test_inputs[train_window:]).reshape(-1, 1))
+
+plt.ion()
+plt.title("Actuals vs. Predictions")
+plt.ylabel("Traffic Volume")
+plt.autoscale(True, 'x', True)
+plt.plot(target)
+plt.plot(inversed_preds)
+plt.show()
+
+plt.plot(target[-train_window:])
+plt.plot(inversed_preds)
+plt.show()
